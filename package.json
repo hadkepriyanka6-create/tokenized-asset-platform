@@ -1,0 +1,29 @@
+{
+  "name": "aurum",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "setup": "npm install && npm --prefix server install && npm --prefix chain install",
+    "dev:api": "npm --prefix server run dev",
+    "dev:all": "concurrently -n web,api -c cyan,magenta \"npm run dev\" \"npm run dev:api\"",
+    "test:api": "npm --prefix server run smoke",
+    "test:contract": "npm --prefix chain test",
+    "test": "npm run test:contract && npm run test:api",
+    "chain:setup": "npm --prefix server run chain:setup",
+    "chain:setup:send": "npm --prefix server run chain:setup:send"
+  },
+  "dependencies": {
+    "ethers": "^6.17.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.1.0",
+    "vite": "^7.1.0"
+  }
+}

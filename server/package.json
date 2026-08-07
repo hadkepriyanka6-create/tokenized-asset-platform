@@ -1,0 +1,30 @@
+{
+  "name": "aurum-api",
+  "version": "1.0.0",
+  "description": "Aurum API — auth, asset registry and the operator's on-chain actions",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "smoke": "node scripts/smoke.cjs",
+    "set-role": "node scripts/set-role.cjs",
+    "chain:setup": "node scripts/setup-chain.cjs",
+    "chain:setup:send": "node scripts/setup-chain.cjs --send"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.17.0",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.8.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

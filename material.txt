@@ -1,0 +1,909 @@
+===============================================================================
+ AURUM — TOKENIZED ASSET & FRACTIONAL OWNERSHIP
+ Presentation material, with a focus on the frontend
+===============================================================================
+
+Read this top to bottom once. Sections 1-2 are the overview you open with.
+Sections 3-16 are the frontend detail (5b covers light/dark mode). Section 17 is a demo script, 18 is
+likely questions with answers, 19 is the honest list of limitations — bring
+those up yourself, it reads as confidence rather than as a gap.
+
+
+===============================================================================
+ 1. WHAT THE PROJECT IS  (30-second version)
+===============================================================================
+
+A platform for owning fractions of physical gold on the blockchain, where the
+law only lets approved people hold it.
+
+Real gold sits in a vault. It is represented on-chain as a token. One token =
+a fixed weight of gold (say 10 grams). Because it is a token, it can be split,
+sold and transferred — that is the "fractional ownership" part.
+
+The hard part is not the code, it is compliance. Financial regulation says you
+cannot let anonymous strangers hold a claim on a real asset. So Aurum is
+"permissioned": an address must pass identity checks and be added to an
+on-chain whitelist before it can hold or receive anything.
+
+The key sentence to say out loud:
+
+    "The compliance rule is enforced inside the smart contract, not in the
+     interface. The website checks it too, but only to save the user a failed
+     transaction — if you bypassed our website entirely and called the
+     contract directly, it would still reject you."
+
+That is the difference between a real regulated product and a demo.
+
+
+===============================================================================
+ 2. THE THREE PARTS AND HOW THEY FIT
+===============================================================================
+
+    chain/     The smart contract (Solidity) + 47 automated tests
+    server/    The API (Node.js + Express + MongoDB)
+    src/       The frontend (React) ..................... <- main focus
+
+Live on the Ethereum Sepolia test network at
+0xeDa6d8F811B1b97d57D9cBaCBFDf515Cba5cc212
+
+How data flows:
+
+    Browser  --(HTTP + JWT)-->  API  --(RPC)-->  Ethereum (Sepolia)
+       |                                              ^
+       +----------(MetaMask, user signs)--------------+
+
+Two important design decisions to be able to defend:
+
+(a) THE CONTRACT IS THE SOURCE OF TRUTH.
+    Balances, supply, prices, the whitelist and roles are read live from the
+    blockchain on every request. The database stores only what the chain has
+    no room for: user accounts, passwords, the human-readable name of a batch,
+    and an audit log. We never cache a balance, because a cached balance is a
+    wrong balance the moment someone trades.
+
+(b) TWO DIFFERENT SIGNERS, ON PURPOSE.
+
+    Action                        Signed by            Why
+    ---------------------------------------------------------------------
+    Buy / sell / transfer         User's MetaMask      The contract requires
+                                                       msg.sender to be the
+                                                       whitelisted holder.
+    Create batch, mint, burn      Server wallet        Issuance is a platform
+                                                       action (ISSUER_ROLE).
+    Approve/remove addresses      Server wallet        Compliance decisions
+                                                       (COMPLIANCE_ROLE).
+    Fee, treasury, pause          Server wallet        Admin (ADMIN/PAUSER).
+
+    Consequence worth stating: the server physically cannot move a user's
+    tokens. Even if the server were hacked, holder funds cannot be stolen,
+    because the contract only accepts those instructions from the holder's own
+    wallet.
+
+
+===============================================================================
+ 3. FRONTEND STACK — AND WHY EACH CHOICE
+===============================================================================
+
+    React 19        UI library
+    Vite 7          Build tool and dev server
+    ethers.js v6    Talking to Ethereum / MetaMask
+    Plain CSS       No framework
+
+Only THREE runtime dependencies: react, react-dom, ethers.
+
+Why Vite instead of Create React App:
+    Vite serves raw ES modules to the browser during development, so it does
+    not rebuild the whole bundle on every save. Startup is ~90ms and saves
+    appear instantly (Hot Module Replacement). CRA is also officially
+    deprecated. For production Vite uses Rollup and outputs a minified bundle.
+
+Why no CSS framework (Tailwind/Bootstrap):
+    The project had a specific visual design to implement. A framework would
+    have meant fighting its defaults. Instead the design's own values were
+    encoded as CSS custom properties — 28 of them. See section 5.
+
+Why no component library (MUI, shadcn):
+    Same reason, plus every component here is small enough to own outright.
+    The whole frontend is ~6,400 lines including CSS.
+
+Why no state management library (Redux, Zustand):
+    See section 7.
+
+Why no router library (React Router):
+    See section 6.
+
+    The general principle to state: "We added a dependency only when writing
+    it ourselves would have been worse. Three dependencies is a deliberate
+    result, not an accident."
+
+
+===============================================================================
+ 4. FILE STRUCTURE — HOW THE CODE IS ORGANISED
+===============================================================================
+
+    src/
+      main.jsx           Entry point — mounts React
+      App.jsx            Routing + the access gate
+      styles.css         The design system + both themes (1,415 lines)
+
+      lib/               Pure logic, no React. Testable in isolation.
+        api.js           HTTP client for our API
+        wallet.js        MetaMask integration
+        abi.js           Contract interface + error translation
+        pricing.js       Quote maths (fees, slippage)
+        format.js        Number / address / date formatting
+        router.js        Custom hash router
+        theme.js         Light/dark store (useSyncExternalStore)
+
+      state/
+        store.jsx        Global state and all actions
+        demo.js          Offline fallback data
+
+      components/        Reusable UI (8 files)
+        Chrome.jsx       Header, nav tabs, live price strip
+        Fields.jsx       Form inputs
+        Panels.jsx       Cards, notices, stat tiles
+        Modal.jsx        Dialog with focus management
+        TxModal.jsx      Transaction progress
+        Skeleton.jsx     Loading placeholders
+        DevPanel.jsx     Status / debug panel
+        ThemeToggle.jsx  Light/dark controls
+
+      screens/           One file per page (13 files)
+        Auth, Entry, Overview, AssetDetail, Portfolio,
+        Transfer, Custody, Admin, Patterns
+        admin/           Whitelist, Batches, Settings, Access
+
+The organising rule: LIB HAS NO REACT. Anything that is pure computation
+(formatting a number, calculating a fee, decoding a blockchain error) lives in
+lib/ as a plain function. This makes it independently testable and keeps the
+components about presentation.
+
+
+===============================================================================
+ 5. THE DESIGN SYSTEM  (CSS custom properties)
+===============================================================================
+
+Rather than hard-coding colours across 20 files, every design value is defined
+once as a CSS variable — and because of that, adding a whole second theme
+later meant redefining values, not touching components (see 5b):
+
+    :root {
+      --bg: #0a0a0b;          --surface: #141416;
+      --border: #232326;      --text: #f5f5f5;
+      --gold: #d9a441;        --r-card: 10px;
+      ...28 in total
+    }
+
+Used as:  background: var(--surface);
+
+Why this matters (say this):
+    "Changing the accent colour of the entire application is a one-line
+     change. It also documents the design rules in code — a new developer can
+     read the token list and know what is allowed."
+
+There is a written design rule enforced by the system:
+    Gold is used ONLY for numbers and active states. It is never a button
+    fill, never a background. Primary buttons are white on black. This keeps
+    the eye going to the data, which is what matters in a finance product.
+
+Naming convention: BEM-ish utility classes (.card, .card-flush, .btn,
+.btn-primary, .row, .ledger). Semantic, not descriptive — the class says what
+a thing IS, not what it looks like.
+
+
+===============================================================================
+ 5b. LIGHT AND DARK MODE
+===============================================================================
+
+Files: src/styles.css (theme blocks), src/lib/theme.js,
+       src/components/ThemeToggle.jsx, index.html (inline script)
+
+Because every colour was already a variable (section 5), adding a second theme
+meant redefining 19 variables — no component changed at all. That is the
+payoff of the token system, and it is the point to make.
+
+THREE STATES, NOT TWO
+    'dark'   explicit choice, remembered
+    'light'  explicit choice, remembered
+    null     follow the operating system, and keep following it
+
+    Most implementations only do two and lose the system preference. The CSS
+    resolution order:
+
+        :root                                  -> dark (the designed default)
+        @media (prefers-color-scheme: light)
+          :root:not([data-theme])              -> light, if no explicit choice
+        :root[data-theme="light" | "dark"]     -> explicit choice wins
+
+    The :not([data-theme]) selector is the important line: the media query only
+    applies while the user has not chosen, so an explicit choice is never
+    overridden by the OS.
+
+LIGHT IS NOT AN INVERSION — the accessibility point
+    The brand gold #d9a441 scores 2.25:1 contrast on white. WCAG AA requires
+    4.5:1 for normal text, and in this design gold carries the NUMBERS — the
+    prices and balances. Simply inverting the palette would have made the most
+    important content the least readable.
+
+    So light mode uses a deeper gold, #8a6410, at 5.37:1. A second token,
+    --gold-mark (#a97c23, 3.75:1), is used for solid fills — bullets, the
+    supply bar, the active-tab underline, the spinner — because non-text UI
+    only needs 3:1, and a brighter gold reads better as a colour there.
+
+    Every pair was measured with the WCAG contrast formula, not eyeballed.
+    Say this if asked how the colours were chosen.
+
+THE FLASH-OF-WRONG-THEME PROBLEM
+    React runs after HTML parses. If the theme were applied in a component,
+    the page would paint dark for one frame and then flip to light. The fix is
+    a small synchronous script inline in index.html, before the stylesheet:
+
+        var t = localStorage.getItem('aurum.theme')
+        if (t === 'light' || t === 'dark')
+          document.documentElement.setAttribute('data-theme', t)
+
+    It must be inline and blocking — it cannot live in the bundle, because the
+    bundle loads after the first paint. This is a well-known problem and
+    knowing why the script is where it is makes a good answer.
+
+useSyncExternalStore — the React 18 hook worth naming
+    The toggle appears in several headers, and there is also a three-way
+    control in the status panel. If each used its own useState they would
+    drift out of sync. The theme therefore lives in a module-level store, and
+    components subscribe with useSyncExternalStore — React's official hook for
+    reading state that lives OUTSIDE React. localStorage and matchMedia are
+    exactly that.
+
+        const theme = useSyncExternalStore(subscribe, resolveTheme, () => 'dark')
+
+    (Three arguments: how to subscribe, how to read the value, and what to use
+    during server rendering.)
+
+OTHER DETAILS WORTH A SENTENCE
+  - color-scheme: dark / light is set on :root, so native scrollbars, form
+    controls and autofill styling follow the theme too — one CSS line.
+  - <meta name="theme-color"> is updated in JavaScript, so the mobile browser's
+    address bar matches the page.
+  - The toggle's aria-label announces the DESTINATION ("Switch to light mode"),
+    not the current state — an icon alone tells a screen-reader user nothing.
+  - Surfaces transition over 160ms, wrapped in
+    @media (prefers-reduced-motion: no-preference).
+  - localStorage access is wrapped in try/catch: it throws in some private
+    browsing modes, and a preference failing to save should not break the page.
+
+HOW IT WAS TESTED
+    23 automated checks: defaults with the OS set light and dark, that an
+    explicit choice survives a reload and beats the OS, that "System" clears
+    it again, that the meta tag follows, and that the header toggle and the
+    panel's segmented control stay in sync because they share one store.
+
+    A separate check parses styles.css and asserts all 19 colour tokens exist
+    in all three theme blocks — the realistic failure here is adding a token
+    to one theme and forgetting the other, which would silently inherit a
+    wrong colour rather than error.
+
+
+===============================================================================
+ 6. ROUTING — A CUSTOM HASH ROUTER (~30 lines)
+===============================================================================
+
+File: src/lib/router.js
+
+React Router is ~20KB for what this app needed: nine destinations and no
+nested layouts. Instead:
+
+    export const useRoute = () => {
+      const [hash, setHash] = useState(read)
+      useEffect(() => {
+        const onChange = () => { setHash(read()); window.scrollTo({top: 0}) }
+        window.addEventListener('hashchange', onChange)
+        return () => window.removeEventListener('hashchange', onChange)
+      }, [])
+      return { hash, ...parse(hash) }
+    }
+
+URLs look like  #/asset/2  and  #/transfer?batch=1
+
+Points to make:
+  - Hash routing needs no server configuration. A normal SPA router requires
+    the server to send index.html for every path; hash routing works from any
+    static host, including opening the file directly.
+  - The browser Back button, bookmarking and deep links all work because real
+    URLs are used, not a state variable.
+  - The cleanup function in useEffect removes the listener — this is how you
+    prevent memory leaks in React.
+
+Concepts demonstrated: useEffect with cleanup, custom hooks, browser History
+API, URLSearchParams.
+
+
+===============================================================================
+ 7. STATE MANAGEMENT — CONTEXT + HOOKS
+===============================================================================
+
+File: src/state/store.jsx (579 lines — the largest and most important file)
+
+The problem: the connected wallet, the user, the batch list and the current
+transaction are needed by almost every screen. Passing them down through props
+would mean "prop drilling" through many layers.
+
+The solution: React's Context API, wrapped in a custom hook.
+
+    const AurumContext = createContext(null)
+
+    export function AurumProvider({ children }) { ...all state here... }
+
+    export const useAurum = () => {
+      const value = useContext(AurumContext)
+      if (!value) throw new Error('useAurum must be used inside <AurumProvider>')
+      return value
+    }
+
+Any component then does:
+
+    const { batches, buy, paused } = useAurum()
+
+Why not Redux:
+    Redux solves problems this app does not have — time-travel debugging,
+    complex middleware, very large teams. Context + hooks is built into React,
+    has zero bundle cost, and covers this scale. Adding Redux would be roughly
+    300 lines of boilerplate for no gain.
+
+Hook usage in that file (be ready to explain each):
+    useState    (13)  local pieces of state
+    useCallback (20)  stable function identities
+    useMemo      (2)  the assembled context value
+    useEffect    (4)  boot sequence, wallet listeners, cleanup
+    useRef       (2)  timers and current-stage tracking without re-rendering
+
+WHY useCallback AND useMemo MATTER HERE — this is a likely question:
+    The context value is an object. If a new object were created on every
+    render, every component consuming the context would re-render every time,
+    even if nothing they use changed. Wrapping the value in useMemo and the
+    functions in useCallback keeps their identity stable between renders, so
+    React can skip that work.
+
+WHY useRef FOR TIMERS:
+    A ref holds a mutable value that does NOT trigger a re-render when it
+    changes. Perfect for storing setTimeout IDs so they can be cancelled on
+    unmount. If useState were used, changing it would re-render for no reason.
+
+
+===============================================================================
+ 8. THE ACCESS GATE — ROUTING AS A STATE MACHINE
+===============================================================================
+
+File: src/App.jsx
+
+This is the compliance story expressed in the UI. Reading top to bottom:
+
+    if (!booted)         return <Booting />       // still loading
+    if (first==='custody') return <Custody />     // public page
+    if (!user)           return <Auth />          // not signed in
+    if (onWrongNetwork)  return <WrongNetwork />  // not on Sepolia
+    if (!linked)         return <Connect />       // no wallet attached
+    if (!whitelisted)    return <NotApproved />   // not KYC approved
+    ...then the real app
+
+Each line is a gate. You cannot reach the application until all pass. It reads
+like a specification, which is deliberate — a reviewer can verify the security
+model by reading eight lines.
+
+A subtle bug that was caught and fixed here, worth mentioning because it shows
+testing value:
+    Originally the check was "is a wallet connected?". But MetaMask may
+    already have an account unlocked from another site. That is NOT the same
+    as the user attaching that wallet to their Aurum account. Approval is per
+    address, so the link has to be explicit. The check became "is the
+    connected address the same one this account registered?" — the `linked`
+    flag. Without this, a user could appear to be signed in with an address
+    the account never claimed.
+
+
+===============================================================================
+ 9. WEB3 INTEGRATION — ethers.js + MetaMask
+===============================================================================
+
+Files: src/lib/wallet.js, src/lib/abi.js
+
+MetaMask injects a global object, window.ethereum, following a standard called
+EIP-1193. ethers.js wraps it:
+
+    const provider = new BrowserProvider(window.ethereum)   // read
+    const signer   = await provider.getSigner()             // write
+    const contract = new Contract(address, AURUM_ABI, signer)
+
+    await contract.purchase(batchId, amount, { value: totalWei })
+
+What the ABI is (teacher will ask):
+    The Application Binary Interface is the description of a contract's
+    functions — names, argument types, return types. The browser needs it to
+    encode a function call into the raw bytes Ethereum understands. Ours is a
+    hand-written subset in human-readable form:
+
+        "function purchase(uint256 id, uint256 amount) payable"
+
+    Only the functions a user can call are included. Admin functions are
+    deliberately absent from the frontend ABI — they are not callable from the
+    browser at all.
+
+Network switching:
+    switchToSepolia() calls wallet_switchEthereumChain. If MetaMask replies
+    with error code 4902 ("unrecognised chain") it falls back to
+    wallet_addEthereumChain to add the network first. Handling 4902 is the
+    detail most tutorials miss.
+
+Live wallet events:
+    window.ethereum.on('accountsChanged') and ('chainChanged') are subscribed
+    to, so if the user switches account or network in MetaMask the app reacts
+    immediately rather than showing stale data. The listeners are removed on
+    unmount.
+
+BIGINT — an important technical point:
+    Ethereum amounts are in "wei", where 1 ETH = 10^18 wei. That number is
+    larger than JavaScript's safe integer limit, so ordinary numbers would
+    lose precision. ethers uses BigInt. You can see it in the buy calculation:
+
+        const total = (BigInt(batch.priceWei) * BigInt(qty)
+                       * BigInt(10000 + feeBps)) / 10000n
+
+    Note the `n` suffix — that is BigInt literal syntax. All money maths is
+    done in BigInt and only converted to a display string at the very end.
+
+THE 1% CUSHION (a good detail to show you understood the domain):
+    The price comes from a live Chainlink oracle and is re-read at the moment
+    the transaction executes, which may be seconds later. If it ticked up, the
+    payment would be short and the transaction would revert. So the app sends
+    1% extra — and the contract refunds the difference in the same
+    transaction. The user is never overcharged.
+
+
+===============================================================================
+ 10. THE TRANSACTION LIFECYCLE — A FOUR-STATE MACHINE
+===============================================================================
+
+File: src/state/store.jsx (runWalletTx), src/components/TxModal.jsx
+
+A blockchain transaction is slow and can fail in several places. Users need to
+know which stage they are at. Four states:
+
+    1. sign      "Confirm in your wallet"    — waiting for the user
+    2. pending   "Pending on Sepolia"        — sent, waiting for a block
+    3. complete  "Complete"                  — mined successfully
+    4. failed    "Transaction failed"        — the contract rejected it
+
+    const response = await execute()          // -> state 2, we have a hash
+    const receipt  = await response.wait()    // -> state 3
+    // any throw                              // -> state 4
+
+Detail worth pointing out (shows care about UX):
+    Cancelling during stage 1 aborts the transaction — nothing was sent.
+    Closing during stage 2 only hides the dialog; the transaction continues
+    and still completes, because it is already on the network. The copy says
+    exactly that: "You can close this — it will finish either way." The code
+    honours it: closeTx() only cancels timers when the stage is 'sign'.
+
+Reusability: every action in the app — buying, selling, transferring,
+whitelisting, pausing — goes through this same machine, so the user learns one
+interaction pattern.
+
+
+===============================================================================
+ 11. ERROR HANDLING — TRANSLATING MACHINE ERRORS TO HUMAN LANGUAGE
+===============================================================================
+
+Files: src/lib/abi.js (describeRevert), src/lib/api.js (ApiError)
+
+Solidity contracts fail with "custom errors" — compact identifiers such as:
+
+    AddressNotWhiteListed(0xB41d...)
+
+Shown raw, a user learns nothing. ethers decodes it against the ABI, and a
+lookup table converts it:
+
+    AddressNotWhiteListed  -> "This address isn't approved to receive tokens."
+    StaleOraclePrice       -> "The gold price hasn't updated recently.
+                              Trading is paused until it does."
+    EnforcedPause          -> "Aurum is paused. Transfers and trading are
+                              unavailable."
+
+Wallet-level errors are handled too:
+    ACTION_REJECTED     -> "You rejected the request in your wallet."
+    INSUFFICIENT_FUNDS  -> "Your wallet doesn't have enough Sepolia ETH..."
+
+The principle to state:
+    "Every error message names what happened and what the user can do next.
+     No stack traces, no error codes shown to a user."
+
+The same mapping exists on the server (server/src/services/chain.js), so the
+message is identical whichever layer produced it.
+
+
+===============================================================================
+ 12. FORMS AND VALIDATION
+===============================================================================
+
+CONTROLLED COMPONENTS
+    Every input's value comes from React state and every keystroke updates it:
+
+        <input value={raw} onChange={e => setRaw(e.target.value)} />
+
+    This makes React the single source of truth and allows filtering as the
+    user types — QuantityInput strips non-digits, so an invalid quantity can
+    never exist in state.
+
+VALIDATION MIRRORED FROM THE BACKEND
+    The password rule (8+ chars, uppercase, number, symbol) is shown live in
+    the registration form as four indicators that turn gold as each is met.
+    The SAME rule is enforced on the server.
+
+    Important framing: "Client-side validation is for user experience only.
+    It is never a security control — anyone can call the API directly with
+    curl. That is why the rule exists in both places."
+
+DEBOUNCED ASYNCHRONOUS VALIDATION  (src/screens/Transfer.jsx)
+    Checking whether a recipient is whitelisted requires a network call. Doing
+    that on every keystroke would mean 42 requests for one address. So:
+
+        useEffect(() => {
+          ...synchronous checks first (format, self, contract address)...
+          setCheck({ state: 'checking' })
+          let cancelled = false
+          const timer = setTimeout(async () => {
+            const approved = await isRecipientWhitelisted(value)
+            if (!cancelled) setCheck({ state: approved ? 'ok' : 'blocked' })
+          }, 350)
+          return () => { cancelled = true; clearTimeout(timer) }
+        }, [recipient])
+
+    Two techniques in five lines:
+      - DEBOUNCE: the timer restarts on each keystroke, so the request only
+        fires 350ms after typing stops.
+      - RACE-CONDITION GUARD: the `cancelled` flag means a slow response for
+        an old address cannot overwrite the result for the current one. This
+        is a classic React bug and the cleanup function is the standard fix.
+
+    Cheap checks run first and never hit the network: invalid format, your own
+    address, and the contract's own address (tokens sent there are lost
+    forever — that warning is a real user-protection feature).
+
+
+===============================================================================
+ 13. GRACEFUL DEGRADATION — "DEMO MODE"
+===============================================================================
+
+Files: src/state/store.jsx (boot sequence), src/state/demo.js
+
+On startup the app pings the API. If it does not answer, instead of showing an
+error page it loads a complete set of sample data and runs fully offline.
+
+    try {
+      await api.health()
+      setMode('live')
+      ...
+    } catch {
+      enterDemo()      // sample data, simulated transactions
+    }
+
+A badge in the corner reads LIVE or DEMO so it is never ambiguous.
+
+Why this is worth showing a teacher:
+    "The presentation cannot fail because the network is down or a database
+     is not running. Every screen is reachable in either mode. It also means a
+     designer or reviewer can explore the interface without setting up a
+     blockchain."
+
+Technically it demonstrates the same UI components being driven by two
+different data sources behind one interface — the screens do not know or care
+which mode they are in.
+
+
+===============================================================================
+ 14. RESPONSIVE DESIGN
+===============================================================================
+
+Desktop-first, with a single breakpoint at 900px (plus one reduced-motion
+query). Only one breakpoint is needed because most of the layout adapts
+without media queries at all — see the auto-fit grid below.
+
+Techniques used:
+  - CSS Grid with auto-fit for card layouts:
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr))
+    Columns are chosen by the browser based on available width, with no media
+    query at all.
+  - Flexbox with flex-wrap for toolbars and rows.
+  - Relative units and max-width so nothing overflows.
+
+THE MOST INTERESTING PIECE — TABLES THAT BECOME CARDS:
+    Data tables are unusable on a phone; horizontal scrolling is worse. So on
+    narrow screens each row collapses into a stacked card, and the column
+    header is re-attached to each value using a data attribute and a CSS
+    pseudo-element:
+
+        <span className="ledger-cell" data-label="Tokens held">316</span>
+
+        @media (max-width: 900px) {
+          .ledger { grid-template-columns: 1fr !important; }
+          .ledger-head { display: none; }
+          .ledger-cell[data-label]::before {
+            content: attr(data-label);   /* pulls the label out of the HTML */
+            display: block;
+            font-size: 10.5px;
+            text-transform: uppercase;
+          }
+        }
+
+    attr() reading a data attribute into generated content is a neat trick and
+    a very likely "explain this" question. No JavaScript is involved.
+
+
+===============================================================================
+ 15. ACCESSIBILITY
+===============================================================================
+
+Present in the code (counts are real):
+
+    aria-label      (11)  names controls that have no visible text
+    aria-current    (9)   marks the active tab/page for screen readers
+    aria-hidden     (4)   hides decorative icons from screen readers
+    useId           (3)   generates unique ids to link <label> to <input>
+    role="dialog" + aria-modal + aria-labelledby   on the modal
+    role="tablist" / role="tab" / aria-selected    on the admin tabs
+    tabIndex + programmatic focus                  on the modal
+
+Keyboard support:
+    - Escape closes any modal.
+    - Focus moves into the modal when it opens.
+    - :focus-visible gives a gold outline — visible for keyboard users but not
+      shown on mouse clicks.
+    - Body scrolling is locked while a modal is open, and restored after.
+
+Motion:
+    @media (prefers-reduced-motion: reduce) slows the spinner for users who
+    have asked their operating system to reduce animation.
+
+Semantics: real <button>, <a>, <label>, <fieldset>, <main>, <header>, <nav>
+elements. A disabled fieldset disables every input inside it in one attribute
+— used to freeze the whole transfer form when the contract is paused.
+
+useId is worth calling out specifically:
+    It is a React 18+ hook that generates ids that are stable and unique, even
+    if the same component appears many times on a page. Hand-written ids break
+    exactly then.
+
+
+===============================================================================
+ 16. TESTING THE FRONTEND
+===============================================================================
+
+The app was tested by rendering the real components in jsdom (a JavaScript
+implementation of a browser) and driving them like a user — clicking buttons,
+typing in fields, and asserting on what appeared.
+
+Three scenarios were run:
+    investor — register, link a wallet, browse assets, view the asset page
+    admin    — sign in, load the whitelist, batches, settings and roles
+    demo     — API switched off, confirm the fallback works
+
+MetaMask was replaced with a small stub object answering eth_requestAccounts,
+eth_accounts and eth_chainId — enough to drive the UI without a real wallet.
+
+Two genuine bugs were found this way (good to mention — it shows testing had a
+point rather than being decoration):
+    1. After signing in, chain data was not reloaded. The whitelist and
+       holdings endpoints require a token, and the first attempt happened
+       before login, so they silently returned empty.
+    2. A wallet MetaMask had already unlocked was treated as "linked" to the
+       account without ever being attached. See section 8.
+
+Elsewhere in the project: 47 automated tests for the smart contract and 35 for
+the API, all passing.
+
+
+===============================================================================
+ 17. DEMO SCRIPT — WHAT TO CLICK, IN ORDER
+===============================================================================
+
+Rehearse this. Roughly 5 minutes.
+
+ 1. Open the Custody page first (#/custody).
+    "This is public — readable before signing in. It explains what one token
+     legally represents, who holds the gold, and the risks. The table at the
+     bottom reconciles tokens issued against the attested vault holding, and
+     the numbers are read live from the blockchain."
+
+ 2. Register an account.
+    Type a weak password first, deliberately. Show the four rules turning gold
+    as they are satisfied and the button staying disabled.
+    "The same rule is enforced on the server, because client-side validation
+     is user experience, not security."
+
+ 3. Connect MetaMask.
+    Show the Sepolia network requirement. If on the wrong network, show the
+    switch prompt.
+
+ 4. Land on "This address isn't approved".
+    THIS IS THE MOST IMPORTANT SCREEN. Say:
+    "This is the compliance gate. The contract itself rejects transfers to any
+     address not on its whitelist. I have not been approved yet, so there is
+     nothing I can do here — and no way around it in the interface, because
+     the interface is not what is enforcing it."
+
+ 5. Switch to an admin account, go to Admin -> Whitelist, approve the address.
+    Show the transaction modal moving through its stages. Show the Etherscan
+    link — a real transaction on a real network.
+
+ 6. Return as the investor. Show Overview with live prices.
+    "This price is not stored anywhere. It is calculated by the contract from
+     two Chainlink oracle feeds — the gold price and the ETH price — at the
+     moment you ask."
+
+ 7. Open an asset. Show the supply bar, the buy panel, the fee breakdown.
+
+ 8. Go to Transfer. Paste an address that is NOT whitelisted.
+    Show the warning appearing and the Send button disabling.
+    "The interface checks first purely as a courtesy, to save the user gas on
+     a transaction that would fail anyway."
+
+ 9. Paste the contract's own address. Show the "tokens sent here are lost"
+    warning. A small touch, but it is the kind of thing that protects people.
+
+10. Click the sun/moon icon in the header. Show the whole app switching
+    between light and dark.
+    "Every colour is a CSS variable, so switching themes redefines 19
+     variables — not a single component knows which theme it is in. The gold
+     is a different shade in light mode because the brand gold only scores
+     2.25 to 1 contrast on white, and gold is what the prices are printed in."
+
+11. Resize the browser narrow. Show a table collapsing into stacked cards.
+
+12. Optionally: stop the API, reload, show DEMO mode still working.
+
+
+===============================================================================
+ 18. LIKELY QUESTIONS AND HOW TO ANSWER
+===============================================================================
+
+Q: Why React and not plain HTML/JavaScript?
+A: The interface has a lot of state that changes together — wallet connection,
+   live prices, transaction progress. React re-renders from state
+   automatically, so we never manually update the DOM and it cannot fall out
+   of sync. Components are also reused: one Field component is used in every
+   form in the app.
+
+Q: What actually is a component?
+A: A JavaScript function that receives data (props) and returns a description
+   of UI. React compares the new description to the previous one and updates
+   only what changed. Our Field component is a good example — it accepts a
+   label, hint and flag state, and renders the same input pattern everywhere.
+
+Q: What is the Virtual DOM?
+A: React keeps an in-memory representation of the UI. On a state change it
+   builds a new one, diffs it against the previous, and applies only the
+   differences to the real DOM. Touching the real DOM is the slow part, so
+   doing it minimally is what makes it fast.
+
+Q: What is a hook?
+A: A function starting with "use" that lets a function component hold state or
+   side effects. useState holds a value; useEffect runs code after render
+   (and cleans up); useCallback and useMemo cache things between renders. We
+   also wrote a custom one, useAurum, which is just a hook that reads our
+   context.
+
+Q: How do you keep the private key safe?
+A: There is no private key in the frontend. The user's key never leaves
+   MetaMask — we send MetaMask a description of the transaction, MetaMask asks
+   the user to approve it, and MetaMask signs it. The server has its own key
+   for admin actions, but it is on the server, never sent to the browser, and
+   it has no authority to move a user's tokens.
+
+Q: What stops someone faking a purchase in your database?
+A: The API does not accept amounts. It accepts a transaction hash. The server
+   fetches that transaction's receipt from the blockchain, checks it was sent
+   to our contract, decodes the event, and records what the contract actually
+   emitted. A forged request body creates nothing.
+
+Q: Why is the whitelist on the blockchain and not in the database?
+A: Because a database check can be bypassed by calling the contract directly.
+   Putting it on-chain means the rule is enforced by the network itself. The
+   database only mirrors it for display.
+
+Q: What happens if the price feed goes down?
+A: The contract refuses to trade on a price more than three hours old. Buying
+   and selling stop, and the interface shows "Price unavailable". Transfers
+   between approved holders continue, because they do not depend on a price.
+   This is tested — including exactly at the three-hour boundary.
+
+Q: Is it responsive?
+A: Yes. The main breakpoint is 900px. Grids reflow, and data tables convert
+   into stacked cards with the column headers re-attached to each value using
+   a CSS pseudo-element. (Then demonstrate it.)
+
+Q: How did you add dark mode / how does the theme switching work?
+A: Every colour was already a CSS variable, so a theme is just a second set of
+   values for those variables. There are three states — light, dark, and
+   follow-the-system — and the choice is stored in localStorage. A small
+   inline script in index.html applies it before the first paint, otherwise
+   the page would flash the wrong theme for a frame. The light palette is not
+   an inversion: the gold had to be darkened because the brand gold fails
+   contrast requirements on white, and gold is what the numbers use.
+
+Q: Can two accounts use the same MetaMask wallet?
+A: No, and the API rejects it with a 409. Approval is granted on-chain to an
+   ADDRESS, so if two accounts shared one wallet, compliance approving the
+   first would silently approve the second — a person they never reviewed.
+   One wallet belongs to one account.
+
+   Worth knowing for the demo: MetaMask only shows its account picker the
+   first time a site asks. After that `eth_requestAccounts` returns the same
+   account silently, which can look like the app is ignoring you. So the
+   connect screen has a "Use a different wallet" button that calls
+   `wallet_requestPermissions`, which forces the picker open again.
+
+Q: How would you scale this?
+A: The obvious next step is a subgraph (The Graph) to index holdings, so the
+   portfolio does not need one blockchain call per batch. Beyond that,
+   code-splitting the bundle by route, and caching contract reads with a short
+   TTL.
+
+Q: What was the hardest part?
+A: (Answer honestly.) Reasoning about the two different signers — deciding
+   which actions belong to the user's wallet and which to the server's — and
+   making sure the interface never suggested the server could act for a user.
+
+
+===============================================================================
+ 19. LIMITATIONS — RAISE THESE YOURSELF
+===============================================================================
+
+Acknowledging limits reads as understanding, not weakness.
+
+  - The JWT is stored in localStorage, which is readable by JavaScript on the
+    page. An httpOnly cookie would be more resistant to XSS. localStorage was
+    chosen for simplicity; for production this would change.
+
+  - The production bundle is 559KB (185KB gzipped), most of it ethers.js.
+    Route-based code splitting would reduce the initial load.
+
+  - There is no subgraph. Holdings are fetched by asking the contract for each
+    batch balance, which does not scale to hundreds of batches.
+
+  - AccessControl in Solidity does not enumerate role members, so the roles
+    screen shows whether the platform wallet holds each role rather than
+    listing every holder. Full history is in the contract's events.
+
+  - KYC verification is a flag an administrator sets. There is no document
+    upload or identity-provider integration — that was scoped as the
+    non-technical team member's workstream.
+
+  - All four administrative roles currently sit on one address. In production
+    they should be separated, ideally behind a multisig. This is stated openly
+    on the Custody page under "Risks", which is the honest thing to do.
+
+
+===============================================================================
+ 20. NUMBERS WORTH MEMORISING
+===============================================================================
+
+    Frontend total            ~6,400 lines
+    Runtime dependencies      3 (react, react-dom, ethers)
+    React components          8 shared + 13 screens
+    Design tokens             28 CSS custom properties (19 of them colour,
+                              redefined per theme)
+    Stylesheet                1,437 lines (two complete themes)
+    Largest file              state/store.jsx, 579 lines
+    Production bundle         559KB raw / 185KB gzipped
+    Dev server startup        ~90ms (Vite)
+
+    Contract tests            47, all passing
+    API tests                 35, all passing
+    Network                   Ethereum Sepolia (chain ID 11155111)
+    Token standard            ERC-1155 (one token id per gold batch)
+    Price feeds               Chainlink XAU/USD and ETH/USD
+    Oracle freshness limit    3 hours
+    Platform fee              2.5% (250 basis points, capped at 10%)
+
+===============================================================================
+ END
+===============================================================================

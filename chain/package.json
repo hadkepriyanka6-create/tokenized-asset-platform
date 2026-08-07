@@ -1,0 +1,19 @@
+{
+  "name": "aurum-contracts",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CommodityToken — KYC-gated ERC-1155 for commodity-backed fractional ownership",
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test",
+    "coverage": "hardhat coverage",
+    "slither": "slither . --config-file slither.config.json"
+  },
+  "devDependencies": {
+    "@chainlink/contracts": "^1.5.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "dotenv": "^17.4.2",
+    "hardhat": "^2.22.0"
+  }
+}
